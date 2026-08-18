@@ -12,6 +12,8 @@ import asyncio
 import time
 from dataclasses import dataclass, field, replace
 
+from sentinel.config import MAX_CANDLE_HISTORY_MINUTES
+
 
 @dataclass(frozen=True)
 class Candle:
@@ -31,6 +33,8 @@ class SymbolState:
     volume_24h: float | None = None
     last_update_ts: float | None = None
     last_candle_1m: Candle | None = None
+    # Closed 1m candles only, oldest first, bounded to MAX_CANDLE_HISTORY_MINUTES.
+    candle_history: tuple[Candle, ...] = field(default_factory=tuple)
 
 
 class MarketStateStore:
@@ -69,9 +73,13 @@ class MarketStateStore:
     ) -> None:
         async with self._lock:
             current = self._states.get(symbol, SymbolState(symbol=symbol))
+            history = current.candle_history
+            if candle.is_closed and (not history or history[-1].open_time != candle.open_time):
+                history = (history + (candle,))[-MAX_CANDLE_HISTORY_MINUTES:]
             self._states[symbol] = replace(
                 current,
                 last_candle_1m=candle,
+                candle_history=history,
                 last_update_ts=event_ts if event_ts is not None else time.time(),
             )
 

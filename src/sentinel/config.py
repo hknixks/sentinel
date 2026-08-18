@@ -23,6 +23,13 @@ def _env_float(name: str, default: float) -> float:
     return float(raw)
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return int(raw)
+
+
 BINANCE_FAPI_BASE_URL = _env_str("BINANCE_FAPI_BASE_URL", "https://fapi.binance.com")
 BINANCE_FSTREAM_BASE_URL = _env_str("BINANCE_FSTREAM_BASE_URL", "wss://fstream.binance.com")
 
@@ -36,3 +43,8 @@ WS_RECONNECT_MAX_DELAY_SECONDS = _env_float("WS_RECONNECT_MAX_DELAY_SECONDS", 30
 WS_PING_TIMEOUT_SECONDS = _env_float("WS_PING_TIMEOUT_SECONDS", 20.0)
 
 LOG_LEVEL = _env_str("LOG_LEVEL", "INFO")
+
+# How many closed 1-minute candles to retain per symbol. Must cover the
+# longest lookback used by the feature engine (1h return = 60 candles back)
+# plus headroom for rolling-window baselines. Bounded, never unbounded.
+MAX_CANDLE_HISTORY_MINUTES = _env_int("MAX_CANDLE_HISTORY_MINUTES", 120)

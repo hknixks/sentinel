@@ -19,6 +19,7 @@ from sentinel.binance.ws_client import run_symbol_group
 from sentinel.config import MAX_SYMBOLS_PER_CONNECTION
 from sentinel.logging_setup import setup_logging
 from sentinel.market_state import MarketStateStore
+from sentinel.scanner.scanner import MarketScanner
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,25 @@ async def _log_snapshot_periodically(store: MarketStateStore, stop_event: asynci
             )
 
 
+async def _log_scanner_periodically(store: MarketStateStore, stop_event: asyncio.Event) -> None:
+    scanner = MarketScanner()
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        snapshot = await store.snapshot()
+        results = scanner.scan(snapshot, top_n=10)
+        if not results:
+            logger.info("Scanner: no markets with sufficient history yet")
+            continue
+        logger.info("Scanner: top %d of %d ranked markets", len(results), len(snapshot))
+        for r in results:
+            logger.info("  %s score=%.1f %s", r.symbol, r.score, r.direction)
+
+
 async def run() -> None:
     setup_logging()
     logger.info("SENTINEL Phase 1 starting: real-time market-data engine")
@@ -72,6 +92,7 @@ async def run() -> None:
         asyncio.create_task(run_symbol_group(group, store, stop_event)) for group in groups
     ]
     tasks.append(asyncio.create_task(_log_snapshot_periodically(store, stop_event)))
+    tasks.append(asyncio.create_task(_log_scanner_periodically(store, stop_event)))
 
     try:
         await asyncio.gather(*tasks)
