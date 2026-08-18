@@ -92,7 +92,6 @@ async def run_symbol_group(
     while not stop_event.is_set():
         try:
             logger.info("Connecting to Binance stream for %d symbols", len(symbols))
-            logger.debug("Stream URL: %s", url)
             async with websockets.connect(
                 url, ping_timeout=WS_PING_TIMEOUT_SECONDS
             ) as ws:
