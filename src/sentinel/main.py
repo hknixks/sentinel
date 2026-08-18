@@ -16,10 +16,11 @@ import logging
 
 from sentinel.binance.symbols import discover_usdt_perpetual_symbols
 from sentinel.binance.ws_client import run_symbol_group
-from sentinel.config import MAX_SYMBOLS_PER_CONNECTION
+from sentinel.config import MAX_SYMBOLS_PER_CONNECTION, STRUCTURE_TOP_N
 from sentinel.logging_setup import setup_logging
 from sentinel.market_state import MarketStateStore
 from sentinel.scanner.scanner import MarketScanner
+from sentinel.structure.structure import StructureEngine, analyze_top_markets
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,32 @@ async def _log_scanner_periodically(store: MarketStateStore, stop_event: asyncio
             logger.info("  %s score=%.1f %s", r.symbol, r.score, r.direction)
 
 
+async def _log_structure_periodically(store: MarketStateStore, stop_event: asyncio.Event) -> None:
+    scanner = MarketScanner()
+    engine = StructureEngine()
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        snapshot = await store.snapshot()
+        ranked = scanner.scan(snapshot, top_n=STRUCTURE_TOP_N)
+        if not ranked:
+            continue
+        for scan_result, structure_result in analyze_top_markets(ranked, snapshot, engine):
+            logger.info(
+                "  %s activity=%.1f structure=%s bias=%s confidence=%.1f alignment=%s",
+                scan_result.symbol,
+                scan_result.score,
+                structure_result.structure.pattern,
+                structure_result.directional_bias,
+                structure_result.confidence,
+                structure_result.timeframe_alignment,
+            )
+
+
 async def run() -> None:
     setup_logging()
     logger.info("SENTINEL Phase 1 starting: real-time market-data engine")
@@ -93,6 +120,7 @@ async def run() -> None:
     ]
     tasks.append(asyncio.create_task(_log_snapshot_periodically(store, stop_event)))
     tasks.append(asyncio.create_task(_log_scanner_periodically(store, stop_event)))
+    tasks.append(asyncio.create_task(_log_structure_periodically(store, stop_event)))
 
     try:
         await asyncio.gather(*tasks)
