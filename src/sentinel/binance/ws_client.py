@@ -98,11 +98,7 @@ async def run_symbol_group(
             ) as ws:
                 logger.info("Connected: %d symbols", len(symbols))
                 delay = WS_RECONNECT_BASE_DELAY_SECONDS  # reset backoff on success
-                message_count = 0
                 async for raw_message in ws:
-                    message_count += 1
-                    if message_count <= 5:
-                        logger.info("Raw message #%d: %s", message_count, raw_message[:300])
                     await _process_message(raw_message, store)
                     if stop_event.is_set():
                         break
