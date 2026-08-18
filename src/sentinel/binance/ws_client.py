@@ -35,7 +35,9 @@ def _build_stream_url(symbols: list[str]) -> str:
         lower = symbol.lower()
         streams.append(f"{lower}@miniTicker")
         streams.append(f"{lower}@kline_1m")
-    return f"{BINANCE_FSTREAM_BASE_URL}/stream?streams={'/'.join(streams)}"
+    # miniTicker and kline are /market-category streams; Binance decommissioned
+    # the unrouted legacy path for this category on 2026-04-23.
+    return f"{BINANCE_FSTREAM_BASE_URL}/market/stream?streams={'/'.join(streams)}"
 
 
 def _handle_mini_ticker(data: dict) -> tuple[str, float, float]:
@@ -90,12 +92,17 @@ async def run_symbol_group(
     while not stop_event.is_set():
         try:
             logger.info("Connecting to Binance stream for %d symbols", len(symbols))
+            logger.debug("Stream URL: %s", url)
             async with websockets.connect(
                 url, ping_timeout=WS_PING_TIMEOUT_SECONDS
             ) as ws:
                 logger.info("Connected: %d symbols", len(symbols))
                 delay = WS_RECONNECT_BASE_DELAY_SECONDS  # reset backoff on success
+                message_count = 0
                 async for raw_message in ws:
+                    message_count += 1
+                    if message_count <= 5:
+                        logger.info("Raw message #%d: %s", message_count, raw_message[:300])
                     await _process_message(raw_message, store)
                     if stop_event.is_set():
                         break
