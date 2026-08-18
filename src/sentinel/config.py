@@ -47,9 +47,11 @@ LOG_LEVEL = _env_str("LOG_LEVEL", "INFO")
 # How many closed 1-minute candles to retain per symbol. Must cover the
 # longest lookback used by the feature engine (1h return = 60 candles back)
 # plus headroom for rolling-window baselines and the structure engine's
-# resampled higher-timeframe swing analysis (raised from Phase 2's 120 to
-# give 15m/1h structure more room to accumulate). Bounded, never unbounded.
-MAX_CANDLE_HISTORY_MINUTES = _env_int("MAX_CANDLE_HISTORY_MINUTES", 240)
+# resampled higher-timeframe swing analysis. Raised from Phase 2's 120 to
+# Phase 3's 240, then to 720 (12 hours) so the structure engine can
+# accumulate the 7+ complete 1h candles genuine 1h structure requires --
+# 240 minutes can never provide more than 4. Bounded, never unbounded.
+MAX_CANDLE_HISTORY_MINUTES = _env_int("MAX_CANDLE_HISTORY_MINUTES", 720)
 
 # How many of the scanner's top-ranked markets the structure engine
 # analyzes per pass. Configurable rather than hard-coded so it can be
