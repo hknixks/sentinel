@@ -57,3 +57,15 @@ MAX_CANDLE_HISTORY_MINUTES = _env_int("MAX_CANDLE_HISTORY_MINUTES", 720)
 # analyzes per pass. Configurable rather than hard-coded so it can be
 # tuned per deployment without a code change.
 STRUCTURE_TOP_N = _env_int("STRUCTURE_TOP_N", 20)
+
+# Trade setup engine thresholds (Phase 4). A setup whose resulting
+# risk/reward to TP1 falls below this is rejected outright.
+SETUP_MIN_RISK_REWARD = _env_float("SETUP_MIN_RISK_REWARD", 1.5)
+
+# Breakout setups require relative volume at least this many times the
+# baseline to be considered volume-confirmed.
+SETUP_MIN_BREAKOUT_RELATIVE_VOLUME = _env_float("SETUP_MIN_BREAKOUT_RELATIVE_VOLUME", 1.2)
+
+# Breakout setups require at least this much momentum (% move, best
+# available timeframe) in the setup's direction.
+SETUP_MIN_BREAKOUT_MOMENTUM_PCT = _env_float("SETUP_MIN_BREAKOUT_MOMENTUM_PCT", 0.05)
