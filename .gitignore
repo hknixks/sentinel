@@ -28,3 +28,6 @@ dist/
 
 # Logs
 *.log
+
+# Local alert-store database (Phase 5) -- runtime state, not source.
+data/

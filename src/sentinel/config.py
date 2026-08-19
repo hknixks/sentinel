@@ -30,6 +30,13 @@ def _env_int(name: str, default: int) -> int:
     return int(raw)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 BINANCE_FAPI_BASE_URL = _env_str("BINANCE_FAPI_BASE_URL", "https://fapi.binance.com")
 BINANCE_FSTREAM_BASE_URL = _env_str("BINANCE_FSTREAM_BASE_URL", "wss://fstream.binance.com")
 
@@ -69,3 +76,23 @@ SETUP_MIN_BREAKOUT_RELATIVE_VOLUME = _env_float("SETUP_MIN_BREAKOUT_RELATIVE_VOL
 # Breakout setups require at least this much momentum (% move, best
 # available timeframe) in the setup's direction.
 SETUP_MIN_BREAKOUT_MOMENTUM_PCT = _env_float("SETUP_MIN_BREAKOUT_MOMENTUM_PCT", 0.05)
+
+# --- Alert engine (Phase 5) ---
+# Telegram bot token / chat id. Left empty by default -- never commit
+# real values here or anywhere else; set them in a local, git-ignored
+# .env. The alert engine never logs these.
+TELEGRAM_BOT_TOKEN = _env_str("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = _env_str("TELEGRAM_CHAT_ID", "")
+
+# Dry-run defaults to true: alerts are logged, never sent to Telegram,
+# until this is explicitly set to false with a real bot token configured.
+TELEGRAM_DRY_RUN = _env_bool("TELEGRAM_DRY_RUN", True)
+
+# SQLite file backing the alert store -- see sentinel.alerts.store for
+# why SQLite was chosen. Isolated behind AlertStore so it can be swapped
+# for PostgreSQL/Redis later without touching the alert engine.
+ALERT_DB_PATH = _env_str("ALERT_DB_PATH", "data/alerts.db")
+
+# How often the alert engine re-evaluates the full market universe for
+# new/changed setups.
+ALERT_CHECK_INTERVAL_SECONDS = _env_float("ALERT_CHECK_INTERVAL_SECONDS", 30.0)

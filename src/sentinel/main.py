@@ -14,12 +14,25 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from sentinel.alerts.alert_engine import AlertEngine
+from sentinel.alerts.store import AlertStore
+from sentinel.alerts.telegram_client import TelegramClient
 from sentinel.binance.symbols import discover_usdt_perpetual_symbols
 from sentinel.binance.ws_client import run_symbol_group
-from sentinel.config import MAX_SYMBOLS_PER_CONNECTION, STRUCTURE_TOP_N
+from sentinel.config import (
+    ALERT_CHECK_INTERVAL_SECONDS,
+    ALERT_DB_PATH,
+    MAX_SYMBOLS_PER_CONNECTION,
+    STRUCTURE_TOP_N,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID,
+    TELEGRAM_DRY_RUN,
+)
 from sentinel.logging_setup import setup_logging
 from sentinel.market_state import MarketStateStore
+from sentinel.scanner.features import FeatureEngine
 from sentinel.scanner.scanner import MarketScanner
+from sentinel.setups.setup_engine import SetupEngine
 from sentinel.structure.structure import StructureEngine, analyze_top_markets
 
 logger = logging.getLogger(__name__)
@@ -97,6 +110,51 @@ async def _log_structure_periodically(store: MarketStateStore, stop_event: async
             )
 
 
+async def _run_alerts_periodically(
+    store: MarketStateStore, alert_engine: AlertEngine, stop_event: asyncio.Event
+) -> None:
+    feature_engine = FeatureEngine()
+    structure_engine = StructureEngine()
+    setup_engine = SetupEngine()
+
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=ALERT_CHECK_INTERVAL_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+
+        snapshot = await store.snapshot()
+        for symbol, state in snapshot.items():
+            features = feature_engine.compute(state)
+            structure_result = structure_engine.analyze(state, features=features)
+            evaluation = setup_engine.evaluate(symbol, state, features, None, structure_result)
+            best = max(evaluation.candidates, key=lambda c: c.setup_score, default=None)
+            record = await alert_engine.process_candidate(symbol, best, structure_result, features)
+            if record is not None:
+                logger.info(
+                    "New alert: %s %s %s score=%.1f",
+                    record.symbol,
+                    record.direction,
+                    record.setup_type,
+                    record.setup_score,
+                )
+
+
+async def _poll_telegram_callbacks(
+    telegram: TelegramClient, alert_engine: AlertEngine, stop_event: asyncio.Event
+) -> None:
+    offset: int | None = None
+    while not stop_event.is_set():
+        updates = await telegram.get_updates(offset=offset, timeout=25)
+        for update in updates:
+            offset = update["update_id"] + 1
+            callback_query = update.get("callback_query")
+            if callback_query:
+                await alert_engine.handle_callback(callback_query)
+
+
 async def run() -> None:
     setup_logging()
     logger.info("SENTINEL Phase 1 starting: real-time market-data engine")
@@ -121,6 +179,15 @@ async def run() -> None:
     tasks.append(asyncio.create_task(_log_snapshot_periodically(store, stop_event)))
     tasks.append(asyncio.create_task(_log_scanner_periodically(store, stop_event)))
     tasks.append(asyncio.create_task(_log_structure_periodically(store, stop_event)))
+
+    alert_store = AlertStore(ALERT_DB_PATH)
+    telegram = TelegramClient(TELEGRAM_BOT_TOKEN) if TELEGRAM_BOT_TOKEN else None
+    dry_run = TELEGRAM_DRY_RUN or telegram is None or not TELEGRAM_CHAT_ID
+    alert_engine = AlertEngine(alert_store, telegram, TELEGRAM_CHAT_ID, market_store=store, dry_run=dry_run)
+    logger.info("Alert engine starting (dry_run=%s)", dry_run)
+    tasks.append(asyncio.create_task(_run_alerts_periodically(store, alert_engine, stop_event)))
+    if not dry_run and telegram is not None:
+        tasks.append(asyncio.create_task(_poll_telegram_callbacks(telegram, alert_engine, stop_event)))
 
     try:
         await asyncio.gather(*tasks)
