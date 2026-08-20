@@ -96,3 +96,18 @@ ALERT_DB_PATH = _env_str("ALERT_DB_PATH", "data/alerts.db")
 # How often the alert engine re-evaluates the full market universe for
 # new/changed setups.
 ALERT_CHECK_INTERVAL_SECONDS = _env_float("ALERT_CHECK_INTERVAL_SECONDS", 30.0)
+
+# --- Outcome tracking (Phase 6) ---
+# SQLite file backing the outcome store -- see sentinel.outcomes.store.
+# Separate database file from ALERT_DB_PATH: alerts and outcomes are
+# different lifecycles/retention concerns, kept isolated.
+OUTCOME_DB_PATH = _env_str("OUTCOME_DB_PATH", "data/outcomes.db")
+
+# Maximum forward evaluation horizon per signal. A signal still PENDING
+# (no TP/SL/AMBIGUOUS resolution) after this is marked EXPIRED -- the
+# historical record is kept, never deleted.
+OUTCOME_MAX_HORIZON_SECONDS = _env_float("OUTCOME_MAX_HORIZON_SECONDS", 14400.0)
+
+# How often the outcome tracker re-evaluates pending signals against
+# current candle history.
+OUTCOME_EVALUATION_INTERVAL_SECONDS = _env_float("OUTCOME_EVALUATION_INTERVAL_SECONDS", 60.0)

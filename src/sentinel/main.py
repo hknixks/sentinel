@@ -23,6 +23,9 @@ from sentinel.config import (
     ALERT_CHECK_INTERVAL_SECONDS,
     ALERT_DB_PATH,
     MAX_SYMBOLS_PER_CONNECTION,
+    OUTCOME_DB_PATH,
+    OUTCOME_EVALUATION_INTERVAL_SECONDS,
+    OUTCOME_MAX_HORIZON_SECONDS,
     STRUCTURE_TOP_N,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
@@ -30,6 +33,8 @@ from sentinel.config import (
 )
 from sentinel.logging_setup import setup_logging
 from sentinel.market_state import MarketStateStore
+from sentinel.outcomes.outcome_tracker import OutcomeTracker
+from sentinel.outcomes.store import OutcomeStore
 from sentinel.scanner.features import FeatureEngine
 from sentinel.scanner.scanner import MarketScanner
 from sentinel.setups.setup_engine import SetupEngine
@@ -111,9 +116,13 @@ async def _log_structure_periodically(store: MarketStateStore, stop_event: async
 
 
 async def _run_alerts_periodically(
-    store: MarketStateStore, alert_engine: AlertEngine, stop_event: asyncio.Event
+    store: MarketStateStore,
+    alert_engine: AlertEngine,
+    outcome_tracker: OutcomeTracker,
+    stop_event: asyncio.Event,
 ) -> None:
     feature_engine = FeatureEngine()
+    scanner = MarketScanner()
     structure_engine = StructureEngine()
     setup_engine = SetupEngine()
 
@@ -126,9 +135,17 @@ async def _run_alerts_periodically(
             break
 
         snapshot = await store.snapshot()
+        # Phase 6 needs each symbol's scanner_activity_score for its own
+        # signal snapshot (see outcome_tracker.create_signal below) --
+        # ranked once per cycle over the full universe. This ranking is
+        # NOT passed into setup_engine.evaluate(): Phase 5's alert-
+        # generation behavior (scanner_result=None there) is unchanged.
+        ranked_by_symbol = {r.symbol: r for r in scanner.scan(snapshot)}
+
         for symbol, state in snapshot.items():
             features = feature_engine.compute(state)
             structure_result = structure_engine.analyze(state, features=features)
+            scanner_result = ranked_by_symbol.get(symbol)
             evaluation = setup_engine.evaluate(symbol, state, features, None, structure_result)
             best = max(evaluation.candidates, key=lambda c: c.setup_score, default=None)
             record = await alert_engine.process_candidate(symbol, best, structure_result, features)
@@ -140,6 +157,20 @@ async def _run_alerts_periodically(
                     record.setup_type,
                     record.setup_score,
                 )
+                await outcome_tracker.create_signal(record, best, scanner_result, structure_result)
+
+
+async def _run_outcome_evaluation_periodically(outcome_tracker: OutcomeTracker, stop_event: asyncio.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=OUTCOME_EVALUATION_INTERVAL_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        updated = await outcome_tracker.evaluate_all_pending()
+        if updated:
+            logger.info("Outcome tracker: re-evaluated %d signal(s)", updated)
 
 
 async def _poll_telegram_callbacks(
@@ -185,7 +216,12 @@ async def run() -> None:
     dry_run = TELEGRAM_DRY_RUN or telegram is None or not TELEGRAM_CHAT_ID
     alert_engine = AlertEngine(alert_store, telegram, TELEGRAM_CHAT_ID, market_store=store, dry_run=dry_run)
     logger.info("Alert engine starting (dry_run=%s)", dry_run)
-    tasks.append(asyncio.create_task(_run_alerts_periodically(store, alert_engine, stop_event)))
+
+    outcome_store = OutcomeStore(OUTCOME_DB_PATH)
+    outcome_tracker = OutcomeTracker(outcome_store, store, max_horizon_seconds=OUTCOME_MAX_HORIZON_SECONDS)
+
+    tasks.append(asyncio.create_task(_run_alerts_periodically(store, alert_engine, outcome_tracker, stop_event)))
+    tasks.append(asyncio.create_task(_run_outcome_evaluation_periodically(outcome_tracker, stop_event)))
     if not dry_run and telegram is not None:
         tasks.append(asyncio.create_task(_poll_telegram_callbacks(telegram, alert_engine, stop_event)))
 
