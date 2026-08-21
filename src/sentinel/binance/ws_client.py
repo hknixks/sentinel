@@ -18,6 +18,7 @@ import time
 import websockets
 from websockets.exceptions import WebSocketException
 
+from sentinel.candles.store import CandleStore
 from sentinel.config import (
     BINANCE_FSTREAM_BASE_URL,
     WS_PING_TIMEOUT_SECONDS,
@@ -62,7 +63,24 @@ def _handle_kline(data: dict) -> tuple[str, Candle]:
     return symbol, candle
 
 
-async def _process_message(raw_message: str, store: MarketStateStore) -> None:
+async def _persist_closed_candle_safely(candle_store: CandleStore, symbol: str, candle: Candle) -> None:
+    """Phase 8: a persistence failure (disk full, locked file, ...) must
+    never crash WS ingestion or roll back the in-memory update that
+    already happened via store.update_kline -- it is only ever logged."""
+    try:
+        await candle_store.append_candle(symbol, candle)
+    except Exception:
+        logger.exception(
+            "Failed to persist closed candle for %s at open_time=%s -- in-memory state unaffected",
+            symbol, candle.open_time,
+        )
+
+
+async def _process_message(
+    raw_message: str,
+    store: MarketStateStore,
+    candle_store: CandleStore | None = None,
+) -> None:
     try:
         envelope = json.loads(raw_message)
         data = envelope.get("data", envelope)
@@ -74,6 +92,8 @@ async def _process_message(raw_message: str, store: MarketStateStore) -> None:
         elif event_type == "kline":
             symbol, candle = _handle_kline(data)
             await store.update_kline(symbol, candle, event_ts=time.time())
+            if candle_store is not None and candle.is_closed:
+                await _persist_closed_candle_safely(candle_store, symbol, candle)
         else:
             logger.debug("Ignoring unrecognized event type: %s", event_type)
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
@@ -84,8 +104,12 @@ async def run_symbol_group(
     symbols: list[str],
     store: MarketStateStore,
     stop_event: asyncio.Event,
+    candle_store: CandleStore | None = None,
 ) -> None:
-    """Connect to one combined stream for a group of symbols, reconnecting forever."""
+    """Connect to one combined stream for a group of symbols, reconnecting
+    forever. candle_store is optional (Phase 8) -- when provided, every
+    real closed 1m candle is persisted as it arrives; when omitted,
+    behavior is byte-for-byte identical to Phase 1-7 (in-memory only)."""
     url = _build_stream_url(symbols)
     delay = WS_RECONNECT_BASE_DELAY_SECONDS
 
@@ -98,7 +122,7 @@ async def run_symbol_group(
                 logger.info("Connected: %d symbols", len(symbols))
                 delay = WS_RECONNECT_BASE_DELAY_SECONDS  # reset backoff on success
                 async for raw_message in ws:
-                    await _process_message(raw_message, store)
+                    await _process_message(raw_message, store, candle_store)
                     if stop_event.is_set():
                         break
         except (WebSocketException, OSError, asyncio.TimeoutError) as exc:

@@ -19,9 +19,12 @@ from sentinel.alerts.store import AlertStore
 from sentinel.alerts.telegram_client import TelegramClient
 from sentinel.binance.symbols import discover_usdt_perpetual_symbols
 from sentinel.binance.ws_client import run_symbol_group
+from sentinel.candles.store import CandleStore
 from sentinel.config import (
     ALERT_CHECK_INTERVAL_SECONDS,
     ALERT_DB_PATH,
+    CANDLE_DB_PATH,
+    MAX_CANDLE_HISTORY_MINUTES,
     MAX_SYMBOLS_PER_CONNECTION,
     OUTCOME_DB_PATH,
     OUTCOME_EVALUATION_INTERVAL_SECONDS,
@@ -45,6 +48,26 @@ logger = logging.getLogger(__name__)
 
 def _chunk(items: list[str], size: int) -> list[list[str]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+async def _restore_candle_history(store: MarketStateStore, candle_store: CandleStore) -> int:
+    """Phase 8: one-time startup step, run before any WebSocket task
+    starts. Loads every persisted symbol's candle history in a single
+    query and replays it into MarketStateStore so live ingestion picks up
+    exactly where it left off. A symbol with no persisted history (fresh
+    deployment, or a symbol Binance only just listed) is simply left
+    empty -- identical to Phase 1-7's cold-start behavior, nothing
+    fabricated. Returns the number of symbols actually restored."""
+    by_symbol = await candle_store.load_all()
+    for symbol, candles in by_symbol.items():
+        await store.restore_candle_history(symbol, candles)
+    if by_symbol:
+        total_candles = sum(len(c) for c in by_symbol.values())
+        logger.info(
+            "Restored candle history for %d symbol(s), %d candle(s) total",
+            len(by_symbol), total_candles,
+        )
+    return len(by_symbol)
 
 
 async def _log_snapshot_periodically(store: MarketStateStore, stop_event: asyncio.Event) -> None:
@@ -198,6 +221,10 @@ async def run() -> None:
     store = MarketStateStore()
     await store.init_symbols(symbols)
 
+    candle_store = CandleStore(CANDLE_DB_PATH, max_history_minutes=MAX_CANDLE_HISTORY_MINUTES)
+    restored = await _restore_candle_history(store, candle_store)
+    logger.info("Candle history restore: %d/%d symbols had persisted history", restored, len(symbols))
+
     max_per_conn = int(MAX_SYMBOLS_PER_CONNECTION)
     groups = _chunk(symbols, max_per_conn)
     logger.info("Split %d symbols into %d WebSocket connection(s)", len(symbols), len(groups))
@@ -205,7 +232,8 @@ async def run() -> None:
     stop_event = asyncio.Event()
 
     tasks = [
-        asyncio.create_task(run_symbol_group(group, store, stop_event)) for group in groups
+        asyncio.create_task(run_symbol_group(group, store, stop_event, candle_store))
+        for group in groups
     ]
     tasks.append(asyncio.create_task(_log_snapshot_periodically(store, stop_event)))
     tasks.append(asyncio.create_task(_log_scanner_periodically(store, stop_event)))

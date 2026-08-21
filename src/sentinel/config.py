@@ -111,3 +111,10 @@ OUTCOME_MAX_HORIZON_SECONDS = _env_float("OUTCOME_MAX_HORIZON_SECONDS", 14400.0)
 # How often the outcome tracker re-evaluates pending signals against
 # current candle history.
 OUTCOME_EVALUATION_INTERVAL_SECONDS = _env_float("OUTCOME_EVALUATION_INTERVAL_SECONDS", 60.0)
+
+# --- Candle history persistence (Phase 8) ---
+# SQLite file backing persistent 1m candle history (separate database
+# from alerts/outcomes -- its own lifecycle/retention concern). Closes
+# the Phase 1/6 limitation where MarketStateStore.candle_history lived
+# only in memory and a process restart lost every accumulated candle.
+CANDLE_DB_PATH = _env_str("CANDLE_DB_PATH", "data/candles.db")

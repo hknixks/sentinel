@@ -83,6 +83,36 @@ class MarketStateStore:
                 last_update_ts=event_ts if event_ts is not None else time.time(),
             )
 
+    async def restore_candle_history(self, symbol: str, candles: list[Candle]) -> None:
+        """Phase 8: bulk-loads a symbol's candle_history from persisted
+        storage once at startup, before live WebSocket ingestion begins.
+        Unlike update_kline (which appends one live candle at a time),
+        this replaces the full history in a single step -- restoration is
+        a bulk load, not a replayed sequence of live updates.
+
+        Still defensively re-sorts by open_time, dedupes by open_time
+        (keeping the DB is already unique per (symbol, open_time), this
+        only guards against a caller passing something unsorted or
+        duplicated), and enforces the exact same MAX_CANDLE_HISTORY_MINUTES
+        cap update_kline enforces live -- so restored state is
+        indistinguishable from state that simply never restarted.
+        last_update_ts is deliberately left untouched (never set to "now"
+        here): restoration reflects historical candles, not a live tick,
+        so fabricating a fresh "last updated" time would misrepresent
+        when this symbol was actually last live-observed."""
+        if not candles:
+            return
+        async with self._lock:
+            current = self._states.get(symbol, SymbolState(symbol=symbol))
+            deduped = {c.open_time: c for c in candles}
+            ordered = sorted(deduped.values(), key=lambda c: c.open_time)
+            capped = tuple(ordered[-MAX_CANDLE_HISTORY_MINUTES:])
+            self._states[symbol] = replace(
+                current,
+                candle_history=capped,
+                last_candle_1m=capped[-1] if capped else current.last_candle_1m,
+            )
+
     async def get(self, symbol: str) -> SymbolState | None:
         async with self._lock:
             return self._states.get(symbol)
