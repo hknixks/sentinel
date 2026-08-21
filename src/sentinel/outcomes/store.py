@@ -154,6 +154,27 @@ class OutcomeStore:
         finally:
             conn.close()
 
+    def get_all_signals_sync(self) -> list[SignalRecord]:
+        """Read-only listing of every stored signal, for offline analytics
+        (see sentinel.analytics). Never used by the live tracking path."""
+        conn = self._connect()
+        try:
+            rows = conn.execute("SELECT * FROM signals ORDER BY signal_timestamp").fetchall()
+            return [_row_to_signal(r) for r in rows]
+        finally:
+            conn.close()
+
+    def get_all_windows_sync(self) -> list[WindowResult]:
+        """Read-only listing of every stored outcome window, for offline
+        analytics (see sentinel.analytics). Never used by the live
+        tracking path."""
+        conn = self._connect()
+        try:
+            rows = conn.execute("SELECT * FROM outcome_windows").fetchall()
+            return [_row_to_window(r) for r in rows]
+        finally:
+            conn.close()
+
     def get_signals_for_symbol_sync(self, symbol: str) -> list[SignalRecord]:
         conn = self._connect()
         try:
@@ -227,6 +248,12 @@ class OutcomeStore:
 
     async def get_signals_for_symbol(self, symbol: str) -> list[SignalRecord]:
         return await asyncio.to_thread(self.get_signals_for_symbol_sync, symbol)
+
+    async def get_all_signals(self) -> list[SignalRecord]:
+        return await asyncio.to_thread(self.get_all_signals_sync)
+
+    async def get_all_windows(self) -> list[WindowResult]:
+        return await asyncio.to_thread(self.get_all_windows_sync)
 
     async def update_evaluation(
         self,
